@@ -5,6 +5,8 @@ import threading
 import pandas as pd
 import os
 import sys
+import re
+import shutil
 
 # Add parent directory to path to allow importing core modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,6 +31,10 @@ class MainWindow(ctk.CTk):
         self.loaded_numbers = [] # List of dicts {Number, Name}
         self.attachments = [] # List of dicts: {'path': str, 'type': 'auto'|'custom'|'none', 'text': str}
 
+        # Multi-Account State: separate Chrome instance per account
+        self.account_drivers = {}  # maps account_name -> WhatsAppDriver instance
+        self.BASE_DEBUG_PORT = 9222
+
         # Layout Grid Configuration
         self.grid_columnconfigure(1, weight=1) # Main content expands
         self.grid_rowconfigure(1, weight=1)    # Main content vertically expands
@@ -44,6 +50,9 @@ class MainWindow(ctk.CTk):
 
         # 4. Bottom Footer (Delay Settings & Start)
         self.create_footer()
+
+        # Update top bar account text
+        self._update_acct_btn_text()
 
     def create_top_bar(self):
         self.top_bar = ctk.CTkFrame(self, height=50, corner_radius=0, fg_color="#4CAF50") # Material Green
@@ -66,7 +75,7 @@ class MainWindow(ctk.CTk):
         self.tools_icon = ctk.CTkButton(self.top_bar, text="🛠", width=30, fg_color="transparent", text_color="white")
         self.tools_icon.pack(side="right", padx=5)
         
-        self.acct_btn = ctk.CTkButton(self.top_bar, text="💬 ACCOUNTS", fg_color="transparent", text_color="white", command=self.load_browser_event)
+        self.acct_btn = ctk.CTkButton(self.top_bar, text="💬 ACCOUNTS", fg_color="transparent", text_color="white", command=self.open_accounts_popup)
         self.acct_btn.pack(side="right", padx=5)
 
     def create_sidebar(self):
@@ -258,9 +267,296 @@ class MainWindow(ctk.CTk):
     def _load_browser_thread(self):
         try:
             self.campaign_manager.driver.load_browser()
-            messagebox.showinfo("Status", "Browser Loaded.")
+            messagebox.showinfo("Status", "Browser Loaded. Scan QR code if needed, then start campaign.")
         except Exception as e:
-            messagebox.showerror("Error", f"Error loading browser: {e}")
+            messagebox.showerror(
+                "Error",
+                f"Error loading browser: {e}\n\n"
+                "Tip: Close any Chrome window already opened by WASender and try again."
+            )
+
+    def _get_accounts(self):
+        accounts = []
+        legacy_path = os.path.abspath(os.path.join(os.getcwd(), "whatsapp_profile"))
+        default_path = os.path.abspath(os.path.join(os.getcwd(), "whatsapp_accounts", "Default"))
+        
+        # Determine where Default account points to
+        if os.path.exists(legacy_path) and not os.path.exists(default_path):
+            accounts.append({"name": "Default", "path": legacy_path})
+        else:
+            accounts.append({"name": "Default", "path": default_path})
+            
+        accounts_dir = os.path.abspath(os.path.join(os.getcwd(), "whatsapp_accounts"))
+        if not os.path.exists(accounts_dir):
+            try:
+                os.makedirs(accounts_dir, exist_ok=True)
+            except Exception as e:
+                print(f"Error creating accounts directory: {e}")
+                
+        if os.path.exists(accounts_dir):
+            try:
+                for name in os.listdir(accounts_dir):
+                    if name.lower() == "default":
+                        continue
+                    path = os.path.join(accounts_dir, name)
+                    if os.path.isdir(path):
+                        accounts.append({"name": name, "path": path})
+            except Exception as e:
+                print(f"Error reading accounts directory: {e}")
+                
+        return accounts
+
+    def open_accounts_popup(self):
+        # Create a Toplevel window
+        self.accounts_window = ctk.CTkToplevel(self)
+        self.accounts_window.title("Manage WhatsApp Accounts")
+        self.accounts_window.geometry("500x450")
+        self.accounts_window.resizable(False, False)
+        self.accounts_window.grab_set() # Modal dialog
+        
+        # Focus on parent when closed
+        self.accounts_window.focus()
+        
+        # Top Label
+        title_label = ctk.CTkLabel(
+            self.accounts_window, 
+            text="WhatsApp Accounts", 
+            font=("Arial", 16, "bold"),
+            text_color="#4CAF50"
+        )
+        title_label.pack(pady=15)
+        
+        # Top action frame (+ Add New Account)
+        action_frame = ctk.CTkFrame(self.accounts_window, fg_color="transparent")
+        action_frame.pack(fill="x", padx=20, pady=(0, 10))
+        
+        add_btn = ctk.CTkButton(
+            action_frame, 
+            text="+ Add New Account", 
+            fg_color="#4CAF50", 
+            hover_color="#388E3C",
+            command=self._add_new_account
+        )
+        add_btn.pack(side="left")
+        
+        # Container for scrollable list of accounts
+        self.acc_scroll_frame = ctk.CTkScrollableFrame(self.accounts_window, fg_color="#F5F5F5", height=280)
+        self.acc_scroll_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        
+        self._refresh_accounts_list()
+
+    def _refresh_accounts_list(self):
+        # Clear existing widgets
+        for widget in self.acc_scroll_frame.winfo_children():
+            widget.destroy()
+            
+        accounts = self._get_accounts()
+        active_names = self._get_active_accounts()
+        
+        for acc in accounts:
+            name = acc["name"]
+            path = acc["path"]
+            
+            row = ctk.CTkFrame(self.acc_scroll_frame, fg_color="white", corner_radius=6)
+            row.pack(fill="x", pady=5, padx=5)
+            
+            # Display name
+            is_active = (name in active_names)
+            
+            name_label = ctk.CTkLabel(
+                row, 
+                text=name, 
+                font=("Arial", 13, "bold" if is_active else "normal"),
+                anchor="w"
+            )
+            name_label.pack(side="left", padx=15, pady=10, fill="x", expand=True)
+            
+            if is_active:
+                active_label = ctk.CTkLabel(
+                    row,
+                    text="Logged In",
+                    text_color="#4CAF50",
+                    font=("Arial", 11, "bold")
+                )
+                active_label.pack(side="left", padx=10)
+            else:
+                inactive_label = ctk.CTkLabel(
+                    row,
+                    text="Not Connected",
+                    text_color="gray",
+                    font=("Arial", 11)
+                )
+                inactive_label.pack(side="left", padx=10)
+                
+            # Use / Open button
+            use_btn = ctk.CTkButton(
+                row,
+                text="Switch" if is_active else "Open",
+                width=65,
+                height=28,
+                fg_color="#4CAF50" if is_active else "#66BB6A",
+                hover_color="#388E3C" if is_active else "#4CAF50",
+                text_color="white",
+                command=lambda n=name, p=path: self._use_account(n, p)
+            )
+            use_btn.pack(side="left", padx=5)
+            
+            # Delete button (only for non-Default accounts)
+            if name != "Default":
+                del_btn = ctk.CTkButton(
+                    row,
+                    text="🗑",
+                    width=30,
+                    height=28,
+                    fg_color="#F44336",
+                    hover_color="#D32F2F",
+                    text_color="white",
+                    command=lambda n=name, p=path: self._delete_account(n, p)
+                )
+                del_btn.pack(side="left", padx=(5, 10))
+
+    def _add_new_account(self):
+        dialog = ctk.CTkInputDialog(text="Enter Account Name:", title="Add New Account")
+        name = dialog.get_input()
+        if not name:
+            return
+            
+        # Sanitize name
+        sanitized_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', name).strip()
+        if not sanitized_name:
+            messagebox.showerror("Error", "Invalid account name.")
+            return
+            
+        # Avoid "Default" case insensitively
+        if sanitized_name.lower() == "default":
+            messagebox.showerror("Error", "Cannot use 'Default' as account name.")
+            return
+            
+        # Check if already exists
+        accounts = self._get_accounts()
+        if any(acc["name"].lower() == sanitized_name.lower() for acc in accounts):
+            messagebox.showerror("Error", f"Account '{sanitized_name}' already exists.")
+            return
+            
+        # Create directory for account config storage
+        accounts_dir = os.path.abspath(os.path.join(os.getcwd(), "whatsapp_accounts"))
+        new_path = os.path.join(accounts_dir, sanitized_name)
+        try:
+            os.makedirs(new_path, exist_ok=True)
+            self._refresh_accounts_list()
+            
+            # Immediately open WhatsApp in browser for this new account
+            self._use_account(sanitized_name, new_path)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create account: {e}")
+
+    def _get_next_available_port(self):
+        """Find the next available debug port for a new Chrome instance."""
+        used_ports = set()
+        for driver in self.account_drivers.values():
+            if driver._is_driver_alive():
+                used_ports.add(driver.port)
+        port = self.BASE_DEBUG_PORT
+        while port in used_ports:
+            port += 1
+        return port
+
+    def _use_account(self, name, path):
+        """Open or bring to focus an account's dedicated Chrome browser."""
+        # If this account already has a running Chrome, bring it to focus
+        if name in self.account_drivers:
+            driver = self.account_drivers[name]
+            if driver._is_driver_alive():
+                try:
+                    driver.driver.switch_to.window(driver.driver.current_window_handle)
+                    messagebox.showinfo("Account", f"'{name}' browser is already open.")
+                    self._update_acct_btn_text()
+                    return
+                except Exception:
+                    pass
+            # Driver is dead, remove it
+            del self.account_drivers[name]
+
+        # Launch a new Chrome instance for this account
+        self.update_status_callback(f"Opening WhatsApp for '{name}'...")
+        threading.Thread(
+            target=self._open_account_browser_thread,
+            args=(name, path)
+        ).start()
+
+    def _open_account_browser_thread(self, name, path):
+        """Background thread: launch a separate Chrome instance for this account."""
+        try:
+            from core.whatsapp_driver import WhatsAppDriver
+
+            # Assign a unique debug port for this Chrome instance
+            port = self._get_next_available_port()
+
+            driver = WhatsAppDriver(user_data_dir=path, port=port)
+            driver.load_browser()
+
+            self.account_drivers[name] = driver
+            self._update_acct_btn_text()
+
+            try:
+                if hasattr(self, 'accounts_window') and self.accounts_window.winfo_exists():
+                    self._refresh_accounts_list()
+            except Exception:
+                pass
+
+            messagebox.showinfo("Status", f"WhatsApp opened for '{name}'.\nScan QR code if needed.")
+        except Exception as e:
+            messagebox.showerror(
+                "Error",
+                f"Error opening WhatsApp for '{name}': {e}\n\n"
+                "Tip: Close any Chrome windows opened by WASender and try again."
+            )
+
+    def _delete_account(self, name, path):
+        if name == "Default":
+            messagebox.showerror("Error", "Cannot delete the Default account.")
+            return
+
+        # If this account has a running Chrome, quit it first
+        if name in self.account_drivers:
+            try:
+                self.account_drivers[name].quit()
+            except Exception:
+                pass
+            del self.account_drivers[name]
+
+        if messagebox.askyesno(
+            "Confirm Delete",
+            f"Are you sure you want to delete the account '{name}'?\n"
+            "This will permanently delete all saved login session files."
+        ):
+            try:
+                if os.path.exists(path):
+                    shutil.rmtree(path)
+                self._refresh_accounts_list()
+                self._update_acct_btn_text()
+                messagebox.showinfo("Success", f"Account '{name}' deleted successfully.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to delete account directory: {e}")
+
+    def _get_active_accounts(self):
+        """Return list of account names that currently have a running Chrome browser."""
+        active = []
+        for name, driver in list(self.account_drivers.items()):
+            if driver._is_driver_alive():
+                active.append(name)
+            else:
+                del self.account_drivers[name]
+        return active
+
+    def _update_acct_btn_text(self):
+        active_names = self._get_active_accounts()
+        if not active_names:
+            self.acct_btn.configure(text="💬 ACCOUNTS")
+        elif len(active_names) == 1:
+            self.acct_btn.configure(text=f"💬 ACCOUNTS ({active_names[0]})")
+        else:
+            self.acct_btn.configure(text=f"💬 ACCOUNTS ({len(active_names)} Active)")
 
     def import_numbers(self):
         file_path = filedialog.askopenfilename(filetypes=[("Excel/CSV", "*.xlsx;*.csv")])
@@ -477,33 +773,86 @@ class MainWindow(ctk.CTk):
         if not self.loaded_numbers:
             messagebox.showerror("Error", "No numbers loaded!")
             return
+
+        active_accounts = self._get_active_accounts()
+        if not active_accounts:
+            messagebox.showwarning(
+                "Browser Required",
+                "Please click ACCOUNTS first, log in to at least one WhatsApp Web account, then start the campaign."
+            )
+            return
+
+        if len(active_accounts) == 1:
+            self._execute_campaign_with_account(active_accounts[0])
+        else:
+            self._show_campaign_account_selection_dialog(active_accounts)
+
+    def _show_campaign_account_selection_dialog(self, active_accounts):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Select WhatsApp Account")
+        dialog.geometry("350x300")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        dialog.focus()
         
+        ctk.CTkLabel(
+            dialog,
+            text="Multiple accounts are active.\nSelect which account to run the campaign on:",
+            font=("Arial", 12, "bold"),
+            pady=15
+        ).pack()
+        
+        # Scrollable container for account buttons
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="#F5F5F5", height=180)
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        
+        for name in active_accounts:
+            btn = ctk.CTkButton(
+                scroll,
+                text=name,
+                fg_color="#4CAF50",
+                hover_color="#388E3C",
+                command=lambda n=name: [self._execute_campaign_with_account(n), dialog.destroy()]
+            )
+            btn.pack(fill="x", pady=5, padx=10)
+
+    def _execute_campaign_with_account(self, account_name):
+        # Verify the account has a running browser
+        if account_name not in self.account_drivers:
+            messagebox.showerror("Error", f"No active browser found for '{account_name}'.")
+            self._update_acct_btn_text()
+            return
+
+        account_driver = self.account_drivers[account_name]
+        if not account_driver._is_driver_alive():
+            messagebox.showerror("Error", f"Chrome browser for '{account_name}' is no longer running.")
+            del self.account_drivers[account_name]
+            self._update_acct_btn_text()
+            return
+
         messages = [box.get("1.0", "end-1c") for box in self.msg_boxes]
-        
-        # Validation: allow if message exists, OR if attachments exist (even without text, though usually text is desired)
-        # But if user wants just image, that's fine.
+
+        # Validation: allow if message exists, OR if attachments exist
         has_msg = any(msg.strip() for msg in messages)
         has_att = len(self.attachments) > 0
-        
+
         if not has_msg and not has_att:
             messagebox.showerror("Error", "Message or Attachment required.")
             return
 
         try:
-             # Logic to read from the two delay rows
-             # Row 2 (Before every message) is akin to our per-message delay
              d_min = int(self.delay_each_min.get())
              d_max = int(self.delay_each_max.get())
-             
-             # Ignoring Row 1 (Block delay) for now to keep logic simple, or we can add it to CampaignManager later.
-             
-             known_interval = 20 # Hardcoded for now per UI simplicity, or add back to settings if user asks
+             known_interval = 20
         except ValueError:
              messagebox.showerror("Error", "Invalid delay settings.")
              return
-        
-        # Convert numbers list of dicts to list of dicts (already is)
-        
+
+        self.update_status_callback(f"Starting campaign using account: '{account_name}'...")
+
+        # Point campaign manager's driver to the selected account's driver
+        self.campaign_manager.driver = account_driver
+
         self.campaign_manager.set_config(
             numbers=self.loaded_numbers,
             messages=messages,
@@ -512,7 +861,7 @@ class MainWindow(ctk.CTk):
             known_numbers=[],
             known_interval=known_interval
         )
-        
+
         self.campaign_manager.start_campaign()
 
     def update_status_callback(self, text):

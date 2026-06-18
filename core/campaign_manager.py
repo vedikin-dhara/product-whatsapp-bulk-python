@@ -1,4 +1,5 @@
 import time
+import random
 import threading
 from datetime import datetime
 from .whatsapp_driver import WhatsAppDriver
@@ -29,9 +30,13 @@ class CampaignManager:
         self.known_interval = known_interval
 
     def start_campaign(self):
-        if not self.driver.driver:
-            self.driver.load_browser()
-            
+        try:
+            if not self.driver._is_driver_alive():
+                self.driver.load_browser()
+        except Exception as exc:
+            self._update_status(f"Browser error: {exc}")
+            return
+
         if self.is_running:
             self._update_status("Campaign already running.")
             return
@@ -52,12 +57,12 @@ class CampaignManager:
             self.results = []
             
             if not self.messages and not self.attachments:
-             # Check if we have static attachments that use valid messages
-             # Optimization: just check valid message count.
-             valid_static = any(a.get('type') == 'static' and self.raw_messages[a.get('msg_index')] for a in self.attachments)
-             if not valid_static:
-                 self._update_status("Error: No messages or media configured.")
-                 return
+                # Check if we have static attachments that use valid messages
+                # Optimization: just check valid message count.
+                valid_static = any(a.get('type') == 'static' and self.raw_messages[a.get('msg_index')] for a in self.attachments)
+                if not valid_static:
+                    self._update_status("Error: No messages or media configured.")
+                    return
 
             for i, number_data in enumerate(self.numbers):
                 if not self.is_running:
@@ -115,7 +120,6 @@ class CampaignManager:
                     self.sent_count += 1
                 
                 # Delay
-                import random
                 delay = random.randint(self.delay_range[0], self.delay_range[1])
                 self._update_status(f"Waiting {delay}s...")
                 time.sleep(delay)

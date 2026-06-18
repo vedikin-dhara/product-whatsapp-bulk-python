@@ -1,6 +1,5 @@
 customtkinter
 selenium
-webdriver-manager
 pandas
 openpyxl
 pillow
