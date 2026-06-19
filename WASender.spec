@@ -4,13 +4,27 @@ from PyInstaller.utils.hooks import collect_all
 datas = []
 binaries = []
 hiddenimports = []
+
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+hiddenimports += [
+    'win32gui',
+    'win32con',
+    'win32api',
+    'pywintypes',
+    'pyperclip',
+    'selenium',
+    'pandas',
+    'openpyxl',
+    'PIL',
+    'PIL.Image',
+    'PIL.ImageTk',
+]
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -29,7 +43,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='main',
+    name='WASender',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
