@@ -34,6 +34,8 @@ class MainWindow(ctk.CTk):
         # Multi-Account State: separate Chrome instance per account
         self.account_drivers = {}  # maps account_name -> WhatsAppDriver instance
         self.BASE_DEBUG_PORT = 9222
+        self.account_logs = {}  # maps account_name -> list of string logs
+        self.current_campaign_account = None  # tracks currently running campaign account name
 
         # Layout Grid Configuration
         self.grid_columnconfigure(1, weight=1) # Main content expands
@@ -84,10 +86,10 @@ class MainWindow(ctk.CTk):
         
         # Sidebar Icons (User, Group, Tools)
         # Using simple emoji/text as placeholders for icons
-        self.sb_btn1 = ctk.CTkButton(self.sidebar, text="👤", width=40, fg_color="#E8F5E9", text_color="green", font=("Arial", 20))
+        self.sb_btn1 = ctk.CTkButton(self.sidebar, text="👤", width=40, fg_color="#E8F5E9", text_color="green", font=("Arial", 20), command=self.show_campaign_view)
         self.sb_btn1.pack(pady=10, padx=5)
         
-        self.sb_btn2 = ctk.CTkButton(self.sidebar, text="👥", width=40, fg_color="transparent", text_color="gray", font=("Arial", 20))
+        self.sb_btn2 = ctk.CTkButton(self.sidebar, text="👥", width=40, fg_color="transparent", text_color="gray", font=("Arial", 20), command=self.show_multi_account_view)
         self.sb_btn2.pack(pady=10, padx=5)
         
         self.sb_btn3 = ctk.CTkButton(self.sidebar, text="🛠", width=40, fg_color="transparent", text_color="gray", font=("Arial", 20))
@@ -105,6 +107,9 @@ class MainWindow(ctk.CTk):
 
         # --- Right Panel: Message ---
         self.create_message_panel()
+
+        # --- Multi-Account Panel (Initially hidden) ---
+        self.create_multi_account_frame()
 
     def create_target_panel(self):
         self.target_frame = ctk.CTkFrame(self.main_content, fg_color="white")
@@ -469,6 +474,8 @@ class MainWindow(ctk.CTk):
             if driver._is_driver_alive():
                 try:
                     driver.driver.switch_to.window(driver.driver.current_window_handle)
+                    driver.driver.minimize_window()
+                    driver.driver.maximize_window()
                     messagebox.showinfo("Account", f"'{name}' browser is already open.")
                     self._update_acct_btn_text()
                     return
@@ -478,7 +485,7 @@ class MainWindow(ctk.CTk):
             del self.account_drivers[name]
 
         # Launch a new Chrome instance for this account
-        self.update_status_callback(f"Opening WhatsApp for '{name}'...")
+        self.log_account_activity(name, "Opening WhatsApp browser...")
         threading.Thread(
             target=self._open_account_browser_thread,
             args=(name, path)
@@ -491,12 +498,14 @@ class MainWindow(ctk.CTk):
 
             # Assign a unique debug port for this Chrome instance
             port = self._get_next_available_port()
+            self.log_account_activity(name, f"Launching Chrome browser on port {port}...")
 
             driver = WhatsAppDriver(user_data_dir=path, port=port)
             driver.load_browser()
 
             self.account_drivers[name] = driver
             self._update_acct_btn_text()
+            self.log_account_activity(name, "WhatsApp browser loaded. Scan QR code if needed.")
 
             try:
                 if hasattr(self, 'accounts_window') and self.accounts_window.winfo_exists():
@@ -504,8 +513,12 @@ class MainWindow(ctk.CTk):
             except Exception:
                 pass
 
+            # Update multi account view if visible
+            self.after(0, lambda: self._refresh_multi_accounts_view() if hasattr(self, 'multi_account_frame') and self.multi_account_frame.winfo_viewable() else None)
+
             messagebox.showinfo("Status", f"WhatsApp opened for '{name}'.\nScan QR code if needed.")
         except Exception as e:
+            self.log_account_activity(name, f"Error opening WhatsApp browser: {e}")
             messagebox.showerror(
                 "Error",
                 f"Error opening WhatsApp for '{name}': {e}\n\n"
@@ -848,6 +861,8 @@ class MainWindow(ctk.CTk):
              messagebox.showerror("Error", "Invalid delay settings.")
              return
 
+        self.current_campaign_account = account_name
+        self.log_account_activity(account_name, "Starting campaign execution...")
         self.update_status_callback(f"Starting campaign using account: '{account_name}'...")
 
         # Point campaign manager's driver to the selected account's driver
@@ -865,8 +880,387 @@ class MainWindow(ctk.CTk):
         self.campaign_manager.start_campaign()
 
     def update_status_callback(self, text):
-        print(text) 
-        # Optionally update a status bar if I added one (The image has "Ready" status bottom right usually, I put it top bar or footer)
+        print(text)
+        if self.current_campaign_account:
+            self.log_account_activity(self.current_campaign_account, text)
+            if "Campaign Completed" in text or "error" in text.lower():
+                self.after(500, lambda: setattr(self, 'current_campaign_account', None))
+
+    def create_multi_account_frame(self):
+        self.multi_account_frame = ctk.CTkFrame(self.main_content, fg_color="#F5F5F5", corner_radius=0)
+        self.multi_account_frame.grid_columnconfigure(0, weight=1)
+        self.multi_account_frame.grid_rowconfigure(1, weight=1)
+
+        # Header Frame
+        header = ctk.CTkFrame(self.multi_account_frame, fg_color="white", height=50, corner_radius=6)
+        header.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        
+        lbl = ctk.CTkLabel(header, text="Active WhatsApp Accounts", font=("Arial", 16, "bold"), text_color="#4CAF50")
+        lbl.pack(side="left", padx=15, pady=10)
+
+        # Right side button container frame
+        self.header_btn_container = ctk.CTkFrame(header, fg_color="transparent")
+        self.header_btn_container.pack(side="right", padx=10, pady=5)
+
+        self.disconnect_btn = ctk.CTkButton(self.header_btn_container, text="Disconnect", fg_color="#F44336", hover_color="#D32F2F", width=100, command=self._disconnect_current_account)
+        # Initially packed on refresh
+        self.disconnect_btn.pack(side="right", padx=5)
+
+        self.focus_btn = ctk.CTkButton(self.header_btn_container, text="Focus Browser", fg_color="#4CAF50", hover_color="#388E3C", width=120, command=self._focus_current_account)
+        self.focus_btn.pack(side="right", padx=5)
+
+        self.refresh_btn = ctk.CTkButton(self.header_btn_container, text="🔄 Refresh", fg_color="#4CAF50", hover_color="#388E3C", width=90, command=self._refresh_multi_accounts_view)
+        self.refresh_btn.pack(side="right", padx=5)
+
+        self.manage_btn = ctk.CTkButton(self.header_btn_container, text="💬 Manage Accounts", fg_color="#4CAF50", hover_color="#388E3C", width=140, command=self.open_accounts_popup)
+        self.manage_btn.pack(side="right", padx=5)
+
+        # Container for tabview / empty state
+        self.tabs_container = ctk.CTkFrame(self.multi_account_frame, fg_color="transparent")
+        self.tabs_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.tabs_container.grid_columnconfigure(0, weight=1)
+        self.tabs_container.grid_rowconfigure(0, weight=1)
+        
+        # Create empty state frame (initially hidden)
+        self.empty_state_frame = ctk.CTkFrame(self.tabs_container, fg_color="white", corner_radius=8)
+        content_frame = ctk.CTkFrame(self.empty_state_frame, fg_color="transparent")
+        content_frame.pack(expand=True)
+        
+        emoji_lbl = ctk.CTkLabel(content_frame, text="👥", font=("Arial", 64))
+        emoji_lbl.pack(pady=10)
+        
+        msg_lbl = ctk.CTkLabel(content_frame, text="No Active WhatsApp Accounts", font=("Arial", 16, "bold"), text_color="gray")
+        msg_lbl.pack(pady=5)
+        
+        desc_lbl = ctk.CTkLabel(content_frame, text="Open and log in to one or more accounts using the 'Manage Accounts' button to see them here.", font=("Arial", 12), text_color="gray")
+        desc_lbl.pack(pady=5)
+        
+        open_btn = ctk.CTkButton(content_frame, text="Manage Accounts", fg_color="#4CAF50", hover_color="#388E3C", command=self.open_accounts_popup)
+        open_btn.pack(pady=15)
+
+        # Create Tabview (initially grid_forgotten)
+        self.accounts_tabview = ctk.CTkTabview(self.tabs_container, segmented_button_fg_color="#4CAF50", segmented_button_selected_color="#388E3C", segmented_button_selected_hover_color="#2E7D32", segmented_button_unselected_color="#4CAF50", segmented_button_unselected_hover_color="#66BB6A", text_color="white")
+        
+        self.tab_accounts = set()
+        self.account_textboxes = {}
+        self.embed_frames = {}
+        self.account_hwnds = {}
+
+    def _refresh_multi_accounts_view(self):
+        active_accounts = self._get_active_accounts()
+        
+        # Remove inactive tabs
+        for name in list(self.tab_accounts):
+            if name not in active_accounts:
+                try:
+                    self.accounts_tabview.delete(name)
+                except Exception:
+                    pass
+                self.tab_accounts.remove(name)
+                if name in self.account_textboxes:
+                    del self.account_textboxes[name]
+                if name in self.embed_frames:
+                    del self.embed_frames[name]
+                if name in self.account_hwnds:
+                    del self.account_hwnds[name]
+        
+        # Add new tabs
+        for name in active_accounts:
+            if name not in self.tab_accounts:
+                self.accounts_tabview.add(name)
+                tab_frame = self.accounts_tabview.tab(name)
+                tab_frame.grid_columnconfigure(0, weight=1)
+                tab_frame.grid_rowconfigure(0, weight=1)
+                
+                # Embedded Chrome Frame (using standard tkinter.Frame for native Win32 window HWND compatibility, now takes full width)
+                embed_frame = tkinter.Frame(tab_frame, bg="black")
+                embed_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+                self.embed_frames[name] = embed_frame
+                
+                self.tab_accounts.add(name)
+                
+                # Embed the Chrome window
+                driver = self.account_drivers[name]
+                self.after(500, lambda n=name, dr=driver: self._embed_chrome_window(n, dr))
+        
+        # Show/Hide container views
+        if not self.tab_accounts:
+            self.accounts_tabview.grid_forget()
+            self.empty_state_frame.grid(row=0, column=0, sticky="nsew")
+            
+            # Hide Focus & Disconnect buttons from header
+            self.disconnect_btn.pack_forget()
+            self.focus_btn.pack_forget()
+            self.refresh_btn.pack_forget()
+            self.manage_btn.pack_forget()
+            
+            self.refresh_btn.pack(side="right", padx=5)
+            self.manage_btn.pack(side="right", padx=5)
+        else:
+            self.empty_state_frame.grid_forget()
+            self.accounts_tabview.grid(row=0, column=0, sticky="nsew")
+            
+            # Repack all buttons in correct order
+            self.disconnect_btn.pack_forget()
+            self.focus_btn.pack_forget()
+            self.refresh_btn.pack_forget()
+            self.manage_btn.pack_forget()
+            
+            self.disconnect_btn.pack(side="right", padx=5)
+            self.focus_btn.pack(side="right", padx=5)
+            self.refresh_btn.pack(side="right", padx=5)
+            self.manage_btn.pack(side="right", padx=5)
+
+    def _create_detail_row(self, parent, label_text, val_text, value_color="black"):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=3)
+        lbl = ctk.CTkLabel(row, text=label_text, font=("Arial", 11, "bold"), anchor="w", width=100)
+        lbl.pack(side="left")
+        val = ctk.CTkLabel(row, text=val_text, font=("Arial", 11), text_color=value_color, anchor="w")
+        val.pack(side="left", fill="x", expand=True)
+
+    def _focus_current_account(self):
+        try:
+            name = self.accounts_tabview.get()
+            if name:
+                self._focus_account_browser(name)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to focus browser: {e}")
+
+    def _disconnect_current_account(self):
+        try:
+            name = self.accounts_tabview.get()
+            if name:
+                self._disconnect_account_browser(name)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to disconnect: {e}")
+
+    def _focus_account_browser(self, name):
+        if name in self.account_drivers:
+            driver = self.account_drivers[name]
+            if driver._is_driver_alive():
+                try:
+                    driver.driver.switch_to.window(driver.driver.current_window_handle)
+                    driver.driver.minimize_window()
+                    driver.driver.maximize_window()
+                    self.log_account_activity(name, "[System] Focused browser window.")
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to focus browser: {e}")
+            else:
+                messagebox.showerror("Error", f"Browser for '{name}' is not running.")
+                self._refresh_multi_accounts_view()
+                self._update_acct_btn_text()
+
+    def _disconnect_account_browser(self, name):
+        if name in self.account_drivers:
+            driver = self.account_drivers[name]
+            try:
+                driver.quit()
+                self.log_account_activity(name, "[System] Disconnected browser.")
+            except Exception as e:
+                print(f"Error quitting driver: {e}")
+            
+            if name in self.account_drivers:
+                del self.account_drivers[name]
+                
+            self._refresh_multi_accounts_view()
+            self._update_acct_btn_text()
+            messagebox.showinfo("Disconnected", f"Disconnected browser for '{name}'.")
+
+    def log_account_activity(self, name, text):
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_line = f"[{timestamp}] {text}"
+        
+        if name not in self.account_logs:
+            self.account_logs[name] = []
+        self.account_logs[name].append(log_line)
+        
+        # Thread-safe UI update
+        def update_ui():
+            if name in self.account_textboxes:
+                try:
+                    tb = self.account_textboxes[name]
+                    if tb.winfo_exists():
+                        tb.insert("end", log_line + "\n")
+                        tb.see("end")
+                except Exception:
+                    pass
+        self.after(0, update_ui)
+
+    def _embed_chrome_window(self, name, driver):
+        try:
+            import win32gui
+            import win32con
+        except ImportError as exc:
+            messagebox.showerror(
+                "Dependency Error",
+                "The 'pywin32' package is not installed or configured correctly in your Python environment.\n\n"
+                "Please run this command in your terminal/cmd to fix it:\n"
+                "pip install pywin32\n\n"
+                "Error details: " + str(exc)
+            )
+            return
+        import time
+
+        if not driver._is_driver_alive():
+            return
+
+        # 1. Set a unique title to find the window
+        unique_title = f"WASender_Chrome_Embed_{name}_{driver.port}"
+        self.log_account_activity(name, f"[System] Setting window title to: {unique_title}")
+        try:
+            driver.driver.execute_script(f"document.title = '{unique_title}'")
+        except Exception as e:
+            self.log_account_activity(name, f"[Warning] Error setting initial title: {e}")
+
+        # 2. Find the window handle (HWND)
+        chrome_hwnd = None
+        self.log_account_activity(name, "[System] Scanning for Chrome window handle...")
+        for attempt in range(40):  # Try for up to 4 seconds
+            # Frequently re-set the title in case the loading page overrides it
+            try:
+                driver.driver.execute_script(f"document.title = '{unique_title}'")
+            except Exception:
+                pass
+
+            time.sleep(0.1)
+            def enum_windows_callback(hwnd, extra):
+                nonlocal chrome_hwnd
+                if win32gui.IsWindowVisible(hwnd):
+                    class_name = win32gui.GetClassName(hwnd)
+                    title = win32gui.GetWindowText(hwnd)
+                    if class_name == "Chrome_WidgetWin_1" and unique_title in title:
+                        chrome_hwnd = hwnd
+                        return False
+                return True
+            try:
+                win32gui.EnumWindows(enum_windows_callback, None)
+            except Exception:
+                pass
+            if chrome_hwnd:
+                break
+
+        if not chrome_hwnd:
+            self.log_account_activity(name, f"[Error] Could not find Chrome window for account {name} after multiple attempts.")
+            return
+
+        # 3. Save the handle
+        self.account_hwnds[name] = chrome_hwnd
+        self.log_account_activity(name, f"[System] Found Chrome window handle: {chrome_hwnd}. Embedding...")
+
+        # 4. Reparent to the corresponding frame in the tab (if it exists)
+        if name in self.embed_frames:
+            frame = self.embed_frames[name]
+            # Ensure the frame has been drawn and has a valid ID
+            self.update_idletasks()
+            parent_hwnd = frame.winfo_id()
+
+            try:
+                # 1. Get current style
+                style = win32gui.GetWindowLong(chrome_hwnd, win32con.GWL_STYLE)
+                
+                # 2. Clear WS_POPUP, add WS_CHILD, clear borders and decorations
+                style &= ~win32con.WS_POPUP
+                style &= ~win32con.WS_CAPTION
+                style &= ~win32con.WS_THICKFRAME
+                style &= ~win32con.WS_MINIMIZEBOX
+                style &= ~win32con.WS_MAXIMIZEBOX
+                style &= ~win32con.WS_SYSMENU
+                style |= win32con.WS_CHILD
+                
+                win32gui.SetWindowLong(chrome_hwnd, win32con.GWL_STYLE, style)
+
+                # 3. Set parent
+                win32gui.SetParent(chrome_hwnd, parent_hwnd)
+
+                # 4. Force style/frame change update
+                win32gui.SetWindowPos(
+                    chrome_hwnd, 0, 0, 0, 0, 0,
+                    win32con.SWP_NOACTIVATE | win32con.SWP_NOMOVE | win32con.SWP_NOSIZE |
+                    win32con.SWP_NOZORDER | win32con.SWP_FRAMECHANGED
+                )
+
+                # 5. Make sure the window is visible and show it
+                win32gui.ShowWindow(chrome_hwnd, win32con.SW_SHOW)
+
+                # 6. Resize the embedded window to match the current size of the frame
+                w = frame.winfo_width()
+                h = frame.winfo_height()
+                self.log_account_activity(name, f"[System] Frame size: {w}x{h}")
+                if w <= 1 or h <= 1:
+                    # Frame is not yet sized properly; schedule retry resizing
+                    self.log_account_activity(name, "[System] Frame size too small, scheduling auto-resize...")
+                    self.after(200, lambda: self._force_resize_embed(name, chrome_hwnd))
+                else:
+                    win32gui.MoveWindow(chrome_hwnd, 0, 0, w, h, True)
+                
+                # Bind the configure event to handle frame resizing
+                frame.bind("<Configure>", lambda event, ch=chrome_hwnd: self._on_embed_frame_resize(event, ch))
+            except Exception as e:
+                self.log_account_activity(name, f"[Error] Embedding failed: {e}")
+
+    def _force_resize_embed(self, name, chrome_hwnd):
+        if name in self.embed_frames:
+            frame = self.embed_frames[name]
+            try:
+                frame.update_idletasks()
+                w = frame.winfo_width()
+                h = frame.winfo_height()
+                if w > 1 and h > 1:
+                    import win32gui
+                    win32gui.MoveWindow(chrome_hwnd, 0, 0, w, h, True)
+                    self.log_account_activity(name, f"[System] Resized embedded window to {w}x{h}.")
+                else:
+                    self.after(200, lambda: self._force_resize_embed(name, chrome_hwnd))
+            except Exception:
+                pass
+
+    def _on_embed_frame_resize(self, event, chrome_hwnd):
+        import win32gui
+        if chrome_hwnd:
+            try:
+                win32gui.MoveWindow(chrome_hwnd, 0, 0, event.width, event.height, True)
+            except Exception:
+                pass
+
+    def show_campaign_view(self):
+        # Style buttons
+        self.sb_btn1.configure(fg_color="#E8F5E9", text_color="green")
+        self.sb_btn2.configure(fg_color="transparent", text_color="gray")
+        
+        # Hide multi-account frame if it exists and is gridded
+        if hasattr(self, 'multi_account_frame'):
+            self.multi_account_frame.grid_forget()
+            
+        # Restore target and message panels
+        self.target_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.msg_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+        self.footer.grid(row=2, column=1, sticky="ew")
+
+    def show_multi_account_view(self):
+        # Style buttons
+        self.sb_btn2.configure(fg_color="#E8F5E9", text_color="green")
+        self.sb_btn1.configure(fg_color="transparent", text_color="gray")
+        
+        # Hide target, message, and footer panels
+        self.target_frame.grid_forget()
+        self.msg_frame.grid_forget()
+        self.footer.grid_forget()
+        
+        # Show multi-account frame
+        self.multi_account_frame.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=10, pady=10)
+        
+        # Refresh the tabview contents
+        self._refresh_multi_accounts_view()
+        
+        # Start auto-refresh loop
+        self._schedule_multi_accounts_refresh()
+
+    def _schedule_multi_accounts_refresh(self):
+        if hasattr(self, 'multi_account_frame') and self.multi_account_frame.winfo_viewable():
+            self._refresh_multi_accounts_view()
+            self.after(3000, self._schedule_multi_accounts_refresh)
 
 if __name__ == "__main__":
     app = MainWindow()
