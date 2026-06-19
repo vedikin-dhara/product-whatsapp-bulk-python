@@ -1,25 +1,32 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = []
 binaries = []
 hiddenimports = []
 
+# Collect all customtkinter assets
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# Collect all selenium submodules
+hiddenimports += collect_submodules('selenium')
+
+# Collect all pandas submodules
+hiddenimports += collect_submodules('pandas')
+
+# Other hidden imports
 hiddenimports += [
     'win32gui',
     'win32con',
     'win32api',
     'pywintypes',
     'pyperclip',
-    'selenium',
-    'pandas',
     'openpyxl',
     'PIL',
     'PIL.Image',
     'PIL.ImageTk',
+    'pkg_resources',
 ]
 
 a = Analysis(
