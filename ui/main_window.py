@@ -504,26 +504,28 @@ class MainWindow(ctk.CTk):
             driver.load_browser()
 
             self.account_drivers[name] = driver
-            self._update_acct_btn_text()
+            self.after(0, self._update_acct_btn_text)
             self.log_account_activity(name, "WhatsApp browser loaded. Scan QR code if needed.")
 
-            try:
-                if hasattr(self, 'accounts_window') and self.accounts_window.winfo_exists():
-                    self._refresh_accounts_list()
-            except Exception:
-                pass
+            def safe_refresh():
+                try:
+                    if hasattr(self, 'accounts_window') and self.accounts_window.winfo_exists():
+                        self._refresh_accounts_list()
+                except Exception:
+                    pass
+            self.after(0, safe_refresh)
 
             # Update multi account view if visible
             self.after(0, lambda: self._refresh_multi_accounts_view() if hasattr(self, 'multi_account_frame') and self.multi_account_frame.winfo_viewable() else None)
 
-            messagebox.showinfo("Status", f"WhatsApp opened for '{name}'.\nScan QR code if needed.")
+            self.after(0, lambda: messagebox.showinfo("Status", f"WhatsApp opened for '{name}'.\nScan QR code if needed."))
         except Exception as e:
             self.log_account_activity(name, f"Error opening WhatsApp browser: {e}")
-            messagebox.showerror(
+            self.after(0, lambda: messagebox.showerror(
                 "Error",
                 f"Error opening WhatsApp for '{name}': {e}\n\n"
                 "Tip: Close any Chrome windows opened by WASender and try again."
-            )
+            ))
 
     def _delete_account(self, name, path):
         if name == "Default":
