@@ -1,0 +1,20 @@
+=== AUTOMATICALLY GENERATED UNIQUE LICENSE KEYS ===
+Copy one of these keys to test the License Key popup activation:
+
+Username: SeedUser1
+License Key: WAS-0DXN-WBOP-6T50-UB93
+Status: Not Activated
+
+Username: SeedUser2
+License Key: WAS-BGJL-8ST6-097P-V6QN
+Status: Not Activated
+
+Username: SeedUser3
+License Key: WAS-3KDE-5B2M-10ZW-Y4Z9
+Status: Not Activated
+
+Generated at: 2026-06-20 17:06:12
+Username: NewTestUser
+License Key: WAS-J12S-IVVP-0NV7-TW0I
+Status: Not Activated (Generated via Admin Tool)
+

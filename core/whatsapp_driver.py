@@ -67,6 +67,7 @@ class WhatsAppDriver:
         options.add_argument(f"user-data-dir={self.user_data_dir}")
         options.add_argument("--profile-directory=Default")
         options.add_argument(f"--remote-debugging-port={self.port}")
+        options.add_argument("--app=https://web.whatsapp.com")
         options.add_argument("--start-maximized")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
@@ -163,17 +164,57 @@ class WhatsAppDriver:
                 print(f"Chat failed to load for {number}")
                 return False
 
-            first_media = self._find_first_media_path(attachments)
-            if not first_media:
+            # If there are no attachments, just send text
+            if not attachments:
                 if message and message.strip():
                     self._send_text_only(message)
                     return True
                 print("No message or media to send.")
                 return False
 
-            caption = self._resolve_media_caption(message, attachments, first_media)
-            print(f"Sending photo/video with caption to {number}")
-            return self._upload_and_send(first_media, caption)
+            # We have attachments. Check if any attachment uses the message as caption
+            has_auto_caption = any(att.get('type') == 'auto' for att in attachments)
+
+            # If the main message is NOT used as a caption, send it first as a text message
+            if not has_auto_caption and message and message.strip():
+                self._send_text_only(message)
+                time.sleep(2.0)
+
+            # Process all attachments
+            success_count = 0
+            for att in attachments:
+                path = att.get('path', '')
+                if not path:
+                    continue
+
+                abs_path = os.path.abspath(path)
+                if not os.path.isfile(abs_path):
+                    print(f"Attachment file not found: {abs_path}")
+                    continue
+
+                # Resolve caption for this specific attachment
+                att_type = att.get('type', 'auto')
+                if att_type == 'auto':
+                    caption = message or ""
+                elif att_type in ('custom', 'static'):
+                    caption = att.get('text', '') or ""
+                else:
+                    caption = ""
+
+                # Determine if media or document
+                ext = os.path.splitext(abs_path)[1].lower()
+                is_media = ext in {'.png', '.jpg', '.jpeg', '.mp4', '.3gp', '.mov', '.gif'}
+
+                print(f"Sending attachment '{os.path.basename(abs_path)}' (is_media={is_media}) with caption: {caption[:40]}")
+                if self._upload_and_send(abs_path, is_media, caption):
+                    success_count += 1
+                    time.sleep(2.0)
+                else:
+                    print(f"Failed to send attachment: {abs_path}")
+
+            if not has_auto_caption and message and message.strip():
+                return True
+            return success_count > 0
 
         except Exception as e:
             print(f"Error handling batch for {number}: {e}")
@@ -272,38 +313,42 @@ class WhatsAppDriver:
                 continue
         return False
 
-    def _find_photo_video_input(self):
-        xpath_selectors = [
-            f'//input[@type="file" and @accept="{PHOTO_VIDEO_ACCEPT}"]',
-            '//input[@type="file" and contains(@accept, "image") and contains(@accept, "video") and not(contains(@accept, "webp"))]',
-        ]
-        for xpath in xpath_selectors:
-            inputs = self.driver.find_elements(By.XPATH, xpath)
-            if inputs:
-                return inputs[0]
-
-        for inp in self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']"):
+    def _find_file_inputs(self):
+        inputs = self.driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
+        photo_video_input = None
+        document_input = None
+        
+        for inp in inputs:
             accept = (inp.get_attribute("accept") or "").lower()
-            if "image" in accept and "video" in accept and "webp" not in accept:
-                return inp
+            if "image" in accept and "video" in accept:
+                photo_video_input = inp
+            elif "image" not in accept and "video" not in accept:
+                document_input = inp
+                
+        # Fallbacks
+        if not photo_video_input and inputs:
+            photo_video_input = inputs[0]
+        if not document_input and len(inputs) > 1:
+            document_input = inputs[1] if inputs[1] != photo_video_input else inputs[0]
+        elif not document_input and inputs:
+            document_input = inputs[0]
+            
+        return photo_video_input, document_input
 
-        return None
-
-    def _open_photo_video_picker(self):
-        """
-        Open attach menu and target the hidden Photos & Videos input.
-        Do NOT click the Photos menu item — that opens the native OS file dialog
-        and breaks Selenium file upload on Windows.
-        """
+    def _open_file_input(self, is_media):
         if not self._click_attach_button():
             print("Could not open attach menu.")
             return None
 
-        file_input = self._find_photo_video_input()
-        if file_input:
-            return file_input
+        time.sleep(0.5)
 
-        print("Photos & Videos file input not found.")
+        photo_video_input, document_input = self._find_file_inputs()
+        target_input = photo_video_input if is_media else document_input
+        
+        if target_input:
+            return target_input
+
+        print(f"Target file input (is_media={is_media}) not found.")
         return None
 
     def _wait_for_media_preview(self, timeout=35):
@@ -389,26 +434,26 @@ class WhatsAppDriver:
                 continue
         return False
 
-    def _upload_and_send(self, media_path, caption):
+    def _upload_and_send(self, media_path, is_media, caption):
         """
-        Upload via Photos & Videos hidden input only.
+        Upload via appropriate hidden input (Photos & Videos OR Document).
         Never paste into chat or use generic file inputs (causes sticker send).
         """
         try:
             abs_path = os.path.abspath(media_path)
             if not os.path.isfile(abs_path):
-                print(f"Media file not found: {abs_path}")
+                print(f"File not found: {abs_path}")
                 return False
 
-            file_input = self._open_photo_video_picker()
+            file_input = self._open_file_input(is_media)
             if not file_input:
                 return False
 
-            print(f"Uploading media file: {os.path.basename(abs_path)}")
+            print(f"Uploading file: {os.path.basename(abs_path)}")
             file_input.send_keys(abs_path)
 
             if not self._wait_for_media_preview():
-                print("Media preview did not open after upload.")
+                print("Preview did not open after upload.")
                 return False
 
             if caption and caption.strip():
@@ -417,7 +462,7 @@ class WhatsAppDriver:
                     print(f"Adding caption: {caption[:40]}...")
                     self._set_preview_caption(caption_box, caption)
                 else:
-                    print("Caption box not found; sending media without caption.")
+                    print("Caption box not found; sending without caption.")
 
             if not self._click_preview_send():
                 print("Preview send button not found.")
@@ -430,7 +475,7 @@ class WhatsAppDriver:
             except TimeoutException:
                 pass
 
-            print("Photo/video sent with caption.")
+            print("File sent successfully.")
             return True
 
         except Exception as e:

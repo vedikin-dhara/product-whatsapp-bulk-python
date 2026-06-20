@@ -670,11 +670,17 @@ class MainWindow(ctk.CTk):
         del_btn.pack(side="right", padx=5)
 
     def attach_media(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Media", "*.png;*.jpg;*.jpeg;*.mp4;*.3gp")])
+        file_path = filedialog.askopenfilename(
+            filetypes=[
+                ("All Files", "*.*"),
+                ("Media Files", "*.png;*.jpg;*.jpeg;*.mp4;*.3gp;*.mov;*.gif"),
+                ("Documents", "*.pdf;*.txt;*.docx;*.doc;*.xls;*.xlsx;*.zip;*.rar")
+            ]
+        )
         if file_path:
             # Default logic: If first media, set to auto (Main Msg). Else None.
             ext = os.path.splitext(file_path)[1].lower()
-            is_media = ext in ['.png', '.jpg', '.jpeg', '.mp4', '.3gp', '.mov']
+            is_media = ext in ['.png', '.jpg', '.jpeg', '.mp4', '.3gp', '.mov', '.gif']
             
             # Check if we already have an 'auto' caption
             has_auto = any(a['type'] == 'auto' for a in self.attachments)
